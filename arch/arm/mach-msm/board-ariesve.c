@@ -1101,6 +1101,19 @@ static struct i2c_board_info si4709_info[] __initdata = {
 };
 #endif
 
+static void config_gpio_table(uint32_t *table, int len)
+{
+	int n, rc;
+	for (n = 0; n < len; n++) {
+		rc = gpio_tlmm_config(table[n], GPIO_CFG_ENABLE);
+		if (rc) {
+			pr_err("%s: gpio_tlmm_config(%#x)=%d\n",
+				__func__, table[n], rc);
+			break;
+		}
+	}
+}
+
 #ifdef CONFIG_MSM_CAMERA
 
 #ifdef NOT_SET
@@ -1211,18 +1224,6 @@ static uint32_t camera_on_gpio_table[] = {
 #endif
 };
 
-static void config_gpio_table(uint32_t *table, int len)
-{
-	int n, rc;
-	for (n = 0; n < len; n++) {
-		rc = gpio_tlmm_config(table[n], GPIO_CFG_ENABLE);
-		if (rc) {
-			pr_err("%s: gpio_tlmm_config(%#x)=%d\n",
-				__func__, table[n], rc);
-			break;
-		}
-	}
-}
 static int config_camera_on_gpios(void)
 {
 	config_gpio_table(camera_on_gpio_table,
@@ -1874,7 +1875,7 @@ void msm_snddev_poweramp_off_tty(void)
 }
 
 static struct regulator_bulk_data snddev_regs[] = {
-	{ .supply = "gp4", .min_uV = 2600000, .max_uV = 2600000 },
+	{ .supply = "gp4", .min_uV = 1700000, .max_uV = 2600000 },
 	{ .supply = "ncp", .min_uV = 1800000, .max_uV = 1800000 },
 };
 
@@ -3446,66 +3447,42 @@ static struct i2c_board_info touchkey_info[] __initdata = {
 
 #endif
 
+static struct regulator_bulk_data oliver_tsp_regs[] = {
+	{ .supply = "gp4", .min_uV = 1700000, .max_uV = 1700000 },
+	{ .supply = "xo_out", .min_uV = 2800000, .max_uV = 2800000 },
+};
+
 static int oliver_tsp_ldo_on(void)
 {
-	int rc = 0;
-	struct regulator *vreg_ldo2, *vreg_ldo10 = NULL;
+	int rc;
 
-	printk("[TSP] M1 TSP LDO init\n");
-	// VREG_TSP_1.8V
-	vreg_ldo2 = regulator_get(NULL, "gp4");		
-	if (IS_ERR(vreg_ldo2)) {
-		rc = PTR_ERR(vreg_ldo2);
-		pr_err("%s: gp6 vreg get failed (%d)\n",
-		       __func__, rc);
-		return rc;
-	}
-
-	// VREG_TSP_A3.0V
-	// Oliver Board rev univ01 ldo10 is gp11
-	vreg_ldo10 = regulator_get(NULL, "xo_out"); 
-	if (IS_ERR(vreg_ldo10)) {
-		rc = PTR_ERR(vreg_ldo10);
-		pr_err("%s: gp9 vreg get failed (%d)\n",
-		       __func__, rc);
-		return rc;
-	}
-	rc =  regulator_set_voltage(vreg_ldo2, 1800000,1800000);
+	rc = regulator_bulk_get(NULL, ARRAY_SIZE(oliver_tsp_regs), oliver_tsp_regs);
 	if (rc) {
-		pr_err("%s: vreg LDO2 set level failed (%d)\n",
-		       __func__, rc);
-		return rc;
+		pr_err("%s: could not get regulators: %d\n", __func__, rc);
+		goto out;
 	}
 
-	rc = regulator_set_voltage(vreg_ldo10, 2850000,2850000);
+	rc = regulator_bulk_set_voltage(ARRAY_SIZE(oliver_tsp_regs), oliver_tsp_regs);
 	if (rc) {
-		pr_err("%s: vreg LDO10 set level failed (%d)\n",
-		       __func__, rc);
-		return rc;
+		pr_err("%s: could not set voltages: %d\n", __func__, rc);
+		goto regs_free;
 	}
 
-	rc = regulator_enable(vreg_ldo2);
-
+	rc = regulator_bulk_enable(ARRAY_SIZE(oliver_tsp_regs), oliver_tsp_regs);
 	if (rc) {
-		pr_err("%s: LDO2 vreg enable failed (%d)\n",
-		       __func__, rc);
-		return rc;
+		pr_err("%s: could not enable regulators: %d\n", __func__, rc);
+		goto regs_free;
 	}
 
-	rc = regulator_enable(vreg_ldo10);
+	mdelay(5); /* ensure power is stable */
 
-	if (rc) {
-		pr_err("%s: LDO10 vreg enable failed (%d)\n",
-		       __func__, rc);
-		return rc;
-	}
+	return 0;
 
-	mdelay(5);		/* ensure power is stable */
-
+regs_free:
+	regulator_bulk_free(ARRAY_SIZE(oliver_tsp_regs), oliver_tsp_regs);
+out:
 	return rc;
-
 }
-
 #endif
 
 #if defined (CONFIG_SENSOR_CE147)
@@ -3550,7 +3527,7 @@ static struct msm_gpio optnav_config_data[] = {
 
 static struct regulator_bulk_data optnav_regulators[] = {
 	{ .supply = "gp7", .min_uV = 1800000, .max_uV = 1800000 },
-	{ .supply = "gp4", .min_uV = 2600000, .max_uV = 2600000 },
+	{ .supply = "gp4", .min_uV = 1700000, .max_uV = 2600000 },
 	{ .supply = "gp9", .min_uV = 1800000, .max_uV = 1800000 },
 	{ .supply = "usb", .min_uV = 3300000, .max_uV = 3300000 },
 };
@@ -4278,20 +4255,35 @@ static struct regulator *mddi_ldo15;
 
 static int display_common_init(void)
 {
+	struct regulator_bulk_data regs[2] = {
+		{ .supply = "ldo17", .min_uV = 1700000, .max_uV = 1700000},
+		{ .supply = "ldo15", .min_uV = 2800000, .max_uV = 2800000},
+	};
+
 	int rc = 0;
 
-	mddi_ldo17 = regulator_get(NULL, "ldo17");
-	if (IS_ERR(mddi_ldo17)) {
+	rc = regulator_bulk_get(NULL, ARRAY_SIZE(regs), regs);
+	if (rc) {
 		pr_err("%s: regulator_bulk_get failed: %d\n",
-				__func__, rc);
+			__func__, rc);
+		goto bail;
 	}
 
-	mddi_ldo15 = regulator_get(NULL, "ldo15");
-	if (IS_ERR(mddi_ldo15)) {
-		pr_err("%s: regulator_bulk_get failed: %d\n",
-				__func__, rc);
+	rc = regulator_bulk_set_voltage(ARRAY_SIZE(regs), regs);
+	if (rc) {
+		pr_err("%s: regulator_bulk_set_voltage failed: %d\n",
+			__func__, rc);
+		goto put_regs;
 	}
 
+	mddi_ldo17 = regs[0].consumer;
+	mddi_ldo15 = regs[1].consumer;
+
+	return rc;
+
+put_regs:
+	regulator_bulk_free(ARRAY_SIZE(regs), regs);
+bail:
 	return rc;
 }
 
@@ -4316,18 +4308,17 @@ static int display_common_power(int on)
 		display_regs_initialized = true;
 	}
 
-
 	if (on) {
 		rc = regulator_enable(mddi_ldo17);
 		if (rc) {
-			pr_err("%s: LDO20 regulator enable failed (%d)\n",
+			pr_err("%s: LDO17 regulator enable failed (%d)\n",
 			       __func__, rc);
 			return rc;
 		}
 
 		rc = regulator_enable(mddi_ldo15);
 		if (rc) {
-			pr_err("%s: LCD regulator enable failed (%d)\n",
+			pr_err("%s: LCD LDO15 regulator enable failed (%d)\n",
 				__func__, rc);
 			return rc;
 		}
@@ -4337,14 +4328,14 @@ static int display_common_power(int on)
 	} else {
 		rc = regulator_disable(mddi_ldo17);
 		if (rc) {
-			pr_err("%s: LDO20 regulator disable failed (%d)\n",
+			pr_err("%s: LDO17 regulator disable failed (%d)\n",
 			       __func__, rc);
 			return rc;
 		}
 
 		rc = regulator_disable(mddi_ldo15);
 		if (rc) {
-			pr_err("%s: LCD regulator disable failed (%d)\n",
+			pr_err("%s: LCD LDO15 regulator disable failed (%d)\n",
 				__func__, rc);
 			return rc;
 		}
@@ -4442,6 +4433,10 @@ static int lcdc_common_panel_power(int on)
 	int rc, i;
 	struct msm_gpio *gp;
 
+	/* s6e63m0 panel requires to enable/disable the regulators before resetting of the display,
+	 * otherwise the switch on/off does not work properly*/
+
+	/*
 	rc = display_common_power(on);
 
 	if (rc < 0) {
@@ -4449,6 +4444,7 @@ static int lcdc_common_panel_power(int on)
 				__func__, rc);
 		return rc;
 	}
+	*/
 
 	if (on) {
 		rc = msm_gpios_enable(lcd_panel_gpios,
@@ -4474,8 +4470,6 @@ static int lcdc_panel_power(int on)
 	int flag_on = !!on;
 	static int lcdc_power_save_on;
 
-	return 0;	
-
 	if (lcdc_power_save_on == flag_on)
 		return 0;
 
@@ -4488,6 +4482,7 @@ static struct lcdc_platform_data lcdc_pdata = {
 	.lcdc_power_save   = lcdc_panel_power,
 };
 
+#ifdef CONFIG_FB_MSM_TVOUT
 static int atv_dac_power(int on)
 {
 	int rc = 0;
@@ -4542,14 +4537,15 @@ static struct tvenc_platform_data atv_pdata = {
 	.poll		 = 1,
 	.pm_vid_en	 = atv_dac_power,
 };
+#endif
 
 static void __init msm_fb_add_devices(void)
 {
 	msm_fb_register_device("mdp", &mdp_pdata);
 	msm_fb_register_device("pmdh", &mddi_pdata);
 	msm_fb_register_device("lcdc", &lcdc_pdata);
-	msm_fb_register_device("tvenc", &atv_pdata);
 #ifdef CONFIG_FB_MSM_TVOUT
+	msm_fb_register_device("tvenc", &atv_pdata);
 	msm_fb_register_device("tvout_device", NULL);
 #endif
 }
@@ -5793,7 +5789,7 @@ static int mbp_init_regs(struct device *dev)
 {
 	struct regulator_bulk_data regs[] = {
 		/* Analog and I/O regs */
-		{ .supply = "gp4",  .min_uV = 2600000, .max_uV = 2600000 },
+		{ .supply = "gp4",  .min_uV = 1700000, .max_uV = 2600000 },
 		{ .supply = "s3",   .min_uV = 1800000, .max_uV = 1800000 },
 		/* RF regs */
 		{ .supply = "s2",   .min_uV = 1300000, .max_uV = 1300000 },
@@ -6159,8 +6155,8 @@ static int msm_sdcc_get_wpswitch(struct device *dv)
 }
 #endif
 
-extern int wlan_register_status_notify();
-extern unsigned int wlan_status();
+extern int wlan_register_status_notify(void (*callback)(int, void *), void *dev_id);
+extern unsigned int wlan_status(struct device *dev);
 
 #if defined(CONFIG_MMC_MSM_SDC1_SUPPORT)
 #if defined(CONFIG_CSDIO_VENDOR_ID) && \
@@ -6257,7 +6253,7 @@ static int msm_sdc1_lvlshft_enable(void)
 		goto out;
 	}
 
-	rc = regulator_set_voltage(ldo5, 2850000, 2850000);
+	rc = regulator_set_voltage(ldo5, 2100000, 2100000);
 	if (rc) {
 		pr_err("%s: could not set ldo5 voltage: %d\n", __func__, rc);
 		goto ldo5_free;
@@ -6964,7 +6960,9 @@ static void __init msm7x30_init(void)
 #ifdef CONFIG_DEVICE_NAND
 	msm7x30_init_nand();
 #endif
-
+#ifdef CONFIG_FB_MSM_TVOUT
+	atv_dac_power_init();
+#endif
 //	sensors_ldo_init();
 	msm_fb_add_devices();
 	msm_pm_set_platform_data(msm_pm_data, ARRAY_SIZE(msm_pm_data));
