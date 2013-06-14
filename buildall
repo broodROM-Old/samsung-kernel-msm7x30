@@ -1,6 +1,0 @@
-#!/bin/bash
-clear
-./xconfig
-./build_clean
-./build_bootimg
-./flashkernel
